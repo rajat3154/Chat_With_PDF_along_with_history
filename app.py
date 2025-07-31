@@ -13,7 +13,8 @@ from langchain_community.chat_message_histories import ChatMessageHistory
 from langchain_core.runnables.history import RunnableWithMessageHistory as RunnableMessageHistory
 
 from langchain_groq import ChatGroq
-from langchain_chroma import Chroma
+from langchain.vectorstores import FAISS
+
 from langchain_huggingface import HuggingFaceEmbeddings
 
 # Load environment variables
@@ -54,11 +55,12 @@ if api_key and uploaded_file:
         texts = [str(doc.page_content) for doc in splits if doc.page_content and str(doc.page_content).strip()]
         metadatas = [doc.metadata for doc in splits if doc.page_content and str(doc.page_content).strip()]
 
-        vectorstore = Chroma.from_texts(
-            texts=texts,
-            embedding=embeddings,
-            metadatas=metadatas
-        )
+        vectorstore = FAISS.from_texts(
+    texts=texts,
+    embedding=embeddings,
+    metadatas=metadatas
+)
+
 
         retriever = vectorstore.as_retriever()
 
