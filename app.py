@@ -140,4 +140,3 @@ if api_key:
 else:
     st.warning("Please enter your Groq API key to use the application.")
 
-enhance ui
