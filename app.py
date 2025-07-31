@@ -4,8 +4,6 @@ from dotenv import load_dotenv
 
 from langchain.chains import create_history_aware_retriever
 from langchain.chains.retrieval import create_retrieval_chain
-
-
 from langchain.chains.combine_documents import create_stuff_documents_chain
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_community.document_loaders import PyPDFLoader
@@ -16,7 +14,6 @@ from langchain_core.runnables.history import RunnableWithMessageHistory as Runna
 
 from langchain_groq import ChatGroq
 from langchain.vectorstores import FAISS
-
 from langchain_huggingface import HuggingFaceEmbeddings
 
 # Load environment variables
@@ -26,70 +23,53 @@ os.environ["HF_TOKEN"] = os.getenv("HF_TOKEN")
 # Initialize HuggingFace embeddings
 embeddings = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
 
-# Streamlit UI
-st.title("Conversational RAG with PDF Uploads and Chat History")
-st.write("Upload a PDF file to start chatting with its content.")
+# --- Streamlit App ---
+st.set_page_config(page_title="Chat with PDF", layout="centered")
+st.title("📄 Chat with PDF")
+st.caption("Ask questions about your uploaded PDF using memory-aware RAG.")
 
-api_key = st.text_input("Enter your Groq API key:", type="password")
+# Sidebar: API key, session, upload
+with st.sidebar:
+    st.header("🔐 Configuration")
+    api_key = st.text_input("Groq API Key", type="password")
+    session_id = st.text_input("Session ID", value="default_session")
+    uploaded_file = st.file_uploader("📤 Upload a PDF", type="pdf")
 
 if api_key:
     llm = ChatGroq(groq_api_key=api_key, model_name="gemma2-9b-it")
 
-    session_id = st.text_input("Session ID", value="default_session")
-
     if 'store' not in st.session_state:
         st.session_state.store = {}
 
-    uploaded_file = st.file_uploader("Choose a PDF file", type="pdf", accept_multiple_files=False)
-
     if uploaded_file:
-        with st.spinner("Processing document..."):
-            # Save the uploaded PDF to disk
+        with st.spinner("⏳ Processing document..."):
             temp_pdf = "./temp.pdf"
             with open(temp_pdf, "wb") as f:
                 f.write(uploaded_file.getvalue())
 
-            # Load and split the document
             loader = PyPDFLoader(temp_pdf)
             docs = loader.load()
 
             text_splitter = RecursiveCharacterTextSplitter(chunk_size=5000, chunk_overlap=200)
             splits = text_splitter.split_documents(docs)
 
-            # Create vectorstore
             texts = [str(doc.page_content) for doc in splits if doc.page_content and str(doc.page_content).strip()]
             metadatas = [doc.metadata for doc in splits if doc.page_content and str(doc.page_content).strip()]
 
-
             vectorstore = FAISS.from_texts(
-    texts=texts,
-    embedding=embeddings,
-    metadatas=metadatas
-)
-
-
-
+                texts=texts,
+                embedding=embeddings,
+                metadatas=metadatas
+            )
 
             retriever = vectorstore.as_retriever()
 
-            # Prompt to reformulate user query with chat history
-            contextualize_q_system_prompt = (
-                "Given a chat history and the latest user question, "
-                "which might reference context in the chat history, "
-                "formulate a standalone question which can be understood "
-                "without the chat history. Do not answer the question, "
-                "just reformulate it if needed and otherwise return it as it is."
-            )
             contextualize_q_prompt = ChatPromptTemplate.from_messages([
-                ("system", contextualize_q_system_prompt),
+                ("system", "Given a chat history and the latest user question, which might reference context in the chat history, formulate a standalone question."),
                 MessagesPlaceholder("chat_history"),
                 ("human", "{input}"),
             ])
 
-            # Make retriever chat-history-aware
-            history_aware_retriever = create_history_aware_retriever(llm, retriever, contextualize_q_prompt)
-
-            # Prompt to answer question using retrieved context
             system_prompt = (
                 "You are an assistant for question-answering tasks. "
                 "Use the following pieces of retrieved context to answer "
@@ -103,11 +83,12 @@ if api_key:
                 ("human", "{input}"),
             ])
 
-            # Create final RAG chain
             question_answer_chain = create_stuff_documents_chain(llm, qa_prompt)
-            rag_chain = create_retrieval_chain(history_aware_retriever, question_answer_chain)
+            rag_chain = create_retrieval_chain(
+                create_history_aware_retriever(llm, retriever, contextualize_q_prompt),
+                question_answer_chain
+            )
 
-            # Manage session-level chat history
             def get_session_history(session: str) -> BaseChatMessageHistory:
                 if session not in st.session_state.store:
                     st.session_state.store[session] = ChatMessageHistory()
@@ -121,22 +102,37 @@ if api_key:
                 output_messages_key="answer"
             )
 
-        # Ask user question
-        user_input = st.text_input("Ask a question about the PDF content:")
+        st.success("✅ PDF processed! You can now ask questions.")
+
+        # --- Chat Interface ---
+        st.divider()
+        st.subheader("💬 Ask a question")
+
+        user_input = st.chat_input("Ask something about the PDF...")
+
+        session_history = get_session_history(session_id)
+
         if user_input:
-            session_history = get_session_history(session_id)
-            response = conversational_rag_chain.invoke(
-                {"input": user_input},
-                config={"configurable": {"session_id": session_id}}
-            )
-            st.write("**Assistant:**", response["answer"])
+            with st.spinner("🤖 Thinking..."):
+                response = conversational_rag_chain.invoke(
+                    {"input": user_input},
+                    config={"configurable": {"session_id": session_id}}
+                )
+                st.session_state.last_user_input = user_input
+                st.session_state.last_response = response["answer"]
 
-            with st.expander("Chat History"):
-                for msg in session_history.messages:
-                    st.markdown(f"**{msg.type.title()}:** {msg.content}")
+        # Show chat messages (from history)
+        for msg in session_history.messages:
+            with st.chat_message("user" if msg.type == "human" else "assistant"):
+                st.markdown(msg.content)
 
-        # Clean up temp file
+        # Show latest response (in case not in history yet)
+        if st.session_state.get("last_response") and user_input:
+            with st.chat_message("assistant"):
+                st.markdown(st.session_state.last_response)
+
+        # Cleanup
         os.remove(temp_pdf)
-else:
-    st.warning("Please enter your Groq API key to use the application.")
 
+else:
+    st.info("🔑 Please enter your Groq API key and upload a PDF to begin.")
