@@ -126,10 +126,7 @@ if api_key:
             with st.chat_message("user" if msg.type == "human" else "assistant"):
                 st.markdown(msg.content)
 
-        # Show latest response (in case not in history yet)
-        if st.session_state.get("last_response") and user_input:
-            with st.chat_message("assistant"):
-                st.markdown(st.session_state.last_response)
+        
 
         # Cleanup
         os.remove(temp_pdf)
